@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  freepbx:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPO:-your-username/freepbx-docker}:${IMAGE_TAG:-latest}
+    container_name: lnxr-freepbx-prod
+    restart: unless-stopped
+    
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+      - "${SIP_PORT:-5060}:5060/udp"
+      - "${SIPS_PORT:-5061}:5061/udp"
+      - "${RTP_START:-10000}-${RTP_END:-20000}:10000-20000/udp"
+    
+    environment:
+      - TZ=${TIMEZONE:-Europe/Berlin}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-}
+    
+    volumes:
+      - freepbx_etc_asterisk:/etc/asterisk
+      - freepbx_var_lib_asterisk:/var/lib/asterisk
+      - freepbx_db:/var/lib/mysql
+      - freepbx_www:/var/www/html
+      - freepbx_var_log:/var/log
+      - freepbx_spool:/var/spool/asterisk
+      # SSL certificates for HTTPS
+      - ${SSL_CERT_PATH:-./ssl}:/etc/ssl/certs/freepbx:ro
+    
+    networks:
+      - freepbx_network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/admin/config.php", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+volumes:
+  freepbx_etc_asterisk:
+    name: freepbx_etc_asterisk_prod
+  freepbx_var_lib_asterisk:
+    name: freepbx_var_lib_asterisk_prod
+  freepbx_db:
+    name: freepbx_db_prod
+  freepbx_www:
+    name: freepbx_www_prod
+  freepbx_var_log:
+    name: freepbx_var_log_prod
+  freepbx_spool:
+    name: freepbx_spool_prod
+
+networks:
+  freepbx_network:
+    name: freepbx_network_prod
+    driver: bridge
