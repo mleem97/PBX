@@ -1,0 +1,31 @@
+services:
+  freepbx:
+    build: 
+      context: .
+    image: lnxr-freepbx:17
+    container_name: lnxr-freepbx
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Berlin
+    ports:
+      - "8080:80"
+      - "8443:443"
+      - "5060:5060/udp"
+      - "5061:5061/udp"
+      - "10000-20000:10000-20000/udp"
+    volumes:
+      - freepbx_etc_asterisk:/etc/asterisk
+      - freepbx_var_lib_asterisk:/var/lib/asterisk
+      - freepbx_var_log:/var/log/asterisk
+      - freepbx_spool:/var/spool/asterisk
+      - freepbx_www:/var/www/html
+      - freepbx_db:/var/lib/mysql
+
+volumes:
+  freepbx_etc_asterisk:
+  freepbx_var_lib_asterisk:
+  freepbx_var_log:
+  freepbx_spool:
+  freepbx_www:
+  freepbx_db:
+
