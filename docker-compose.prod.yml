@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   freepbx:
-    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_REPO:-your-username/freepbx-docker}:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-mleem97}/lnxr-freepbx:${IMAGE_TAG:-17}
     container_name: lnxr-freepbx-prod
     restart: unless-stopped
     
