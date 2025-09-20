@@ -2,8 +2,10 @@ services:
   freepbx:
     build: 
       context: .
-    image: lnxr-freepbx:17
-    container_name: lnxr-freepbx
+      tags:
+        - "lnxr-freepbx:dev"
+    image: lnxr-freepbx:dev
+    container_name: lnxr-freepbx-dev
     restart: unless-stopped
     environment:
       - TZ=Europe/Berlin
