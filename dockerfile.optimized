@@ -11,8 +11,9 @@ ENV ASTERISK_VERSION=21
 ENV FREEPBX_BRANCH=release/17.0
 
 # Build-Dependencies installieren
+# HINWEIS: subversion wird von contrib/scripts/get_mp3_source.sh benoetigt.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates lsb-release apt-transport-https software-properties-common curl gnupg2 wget git \
+    ca-certificates lsb-release apt-transport-https software-properties-common curl gnupg2 wget git subversion \
     build-essential libnewt-dev libssl-dev libncurses5-dev libsqlite3-dev \
     libjansson-dev libxml2-dev uuid-dev pkg-config libedit-dev \
     unixodbc-dev libasound2-dev libogg-dev libvorbis-dev libicu-dev libcurl4-openssl-dev \
@@ -33,7 +34,7 @@ RUN cd /usr/src && \
     make menuselect.makeopts && \
     menuselect/menuselect --enable format_mp3 menuselect.makeopts && \
     menuselect/menuselect --enable res_crypto menuselect.makeopts && \
-    make && make install && make samples && make config && \
+    make -j$(nproc) && make install && make samples && make config && \
     echo "/usr/lib/asterisk" > /etc/ld.so.conf.d/asterisk.conf && \
     ldconfig && \
     ldd /usr/sbin/asterisk | tee /tmp/asterisk-ldd.log && \
