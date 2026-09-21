@@ -2,6 +2,9 @@ services:
   freepbx:
     build: 
       context: .
+      # Dateiname ist kleingeschrieben ("dockerfile"), daher explizit angeben.
+      # Default waere "Dockerfile" (gross) und wuerde fehlschlagen.
+      dockerfile: dockerfile
       tags:
         - "lnxr-freepbx:dev"
     image: lnxr-freepbx:dev

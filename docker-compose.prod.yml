@@ -31,7 +31,9 @@ services:
       - freepbx_network
     
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/admin/config.php", "||", "exit", "1"]
+      # CMD-SHELL Form nutzen: die alte JSON-Array Form mit "||" funktioniert nicht,
+      # da "||" als Literal an curl uebergeben wurde und der Check nie korrekt lief.
+      test: ["CMD-SHELL", "curl -f http://localhost/admin/config.php || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

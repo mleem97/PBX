@@ -1,5 +1,5 @@
-# Deployment Script for FreePBX Container
 #!/bin/bash
+# Deployment Script for FreePBX Container
 
 set -e
 
@@ -29,7 +29,8 @@ fi
 source "$ENV_FILE"
 
 # Validate required environment variables
-required_vars=("IMAGE_REGISTRY" "IMAGE_REPO")
+# (muss zu docker-compose.prod.yml passen: IMAGE_REGISTRY + IMAGE_TAG)
+required_vars=("IMAGE_REGISTRY")
 for var in "${required_vars[@]}"; do
     if [ -z "${!var}" ]; then
         echo -e "${RED}❌ Required environment variable $var is not set${NC}"

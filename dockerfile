@@ -34,18 +34,27 @@ RUN apt-get install -y --no-install-recommends \
 # --------------------------------------------------------
 # Asterisk kompilieren
 # --------------------------------------------------------
+# WICHTIG: --libdir=/usr/lib (nicht /usr/lib/asterisk), damit
+# libasteriskssl.so.1 vom dynamic loader gefunden wird.
+# Mit --libdir=/usr/lib/asterisk landete die Lib in einem
+# Verzeichnis ohne ld.so.conf-Eintrag -> Fehler aus Issue #1:
+# "error while loading shared libraries: libasteriskssl.so.1"
 RUN cd /usr/src && \
     wget http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}-current.tar.gz && \
     tar xvf asterisk-${ASTERISK_VERSION}-current.tar.gz && \
     cd asterisk-${ASTERISK_VERSION}*/ && \
     contrib/scripts/get_mp3_source.sh && \
-    ./configure --libdir=/usr/lib/asterisk --with-pjproject-bundled --with-jansson-bundled --with-ssl && \
+    ./configure --libdir=/usr/lib --with-pjproject-bundled --with-jansson-bundled --with-ssl && \
     make menuselect.makeopts && \
     menuselect/menuselect --enable format_mp3 menuselect.makeopts && \
     menuselect/menuselect --enable res_crypto menuselect.makeopts && \
-    make && make install && make samples && make config && ldconfig && \
-    # Ensure SSL libraries are properly linked
-    ldconfig /usr/lib/asterisk && \
+    make && make install && make samples && make config && \
+    echo "/usr/lib/asterisk" > /etc/ld.so.conf.d/asterisk.conf && \
+    ldconfig && \
+    # Verify shared libraries resolve (schlaegt frueh fehl statt erst im Entrypoint)
+    ldd /usr/sbin/asterisk | tee /tmp/asterisk-ldd.log && \
+    if ldd /usr/sbin/asterisk | grep -q "not found"; then echo "FEHLER: unaufgeloeste Asterisk-Libraries:"; grep "not found" /tmp/asterisk-ldd.log; exit 1; fi && \
+    test -f /usr/lib/libasteriskssl.so.1 -o -f /usr/lib/asterisk/libasteriskssl.so.1 && \
     # Verify Asterisk installation
     /usr/sbin/asterisk -V
 

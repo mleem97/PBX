@@ -21,16 +21,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Asterisk kompilieren
+# HINWEIS: --libdir=/usr/lib, damit libasteriskssl.so.1 vom Loader
+# gefunden wird (Fix fuer Issue #1). /usr/lib/asterisk zusaetzlich
+# in ld.so.conf registrieren (Module + Rueckwaertskompatibilitaet).
 RUN cd /usr/src && \
     wget http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}-current.tar.gz && \
     tar xvf asterisk-${ASTERISK_VERSION}-current.tar.gz && \
     cd asterisk-${ASTERISK_VERSION}*/ && \
     contrib/scripts/get_mp3_source.sh && \
-    ./configure --libdir=/usr/lib/asterisk --with-pjproject-bundled --with-jansson-bundled --with-ssl && \
+    ./configure --libdir=/usr/lib --with-pjproject-bundled --with-jansson-bundled --with-ssl && \
     make menuselect.makeopts && \
     menuselect/menuselect --enable format_mp3 menuselect.makeopts && \
     menuselect/menuselect --enable res_crypto menuselect.makeopts && \
-    make && make install && make samples && make config && ldconfig
+    make && make install && make samples && make config && \
+    echo "/usr/lib/asterisk" > /etc/ld.so.conf.d/asterisk.conf && \
+    ldconfig && \
+    ldd /usr/sbin/asterisk | tee /tmp/asterisk-ldd.log && \
+    if ldd /usr/sbin/asterisk | grep -q "not found"; then echo "FEHLER: unaufgeloeste Asterisk-Libraries:"; grep "not found" /tmp/asterisk-ldd.log; exit 1; fi && \
+    test -f /usr/lib/libasteriskssl.so.1 -o -f /usr/lib/asterisk/libasteriskssl.so.1
 
 # FreePBX Framework klonen
 RUN cd /usr/src && \
@@ -52,18 +60,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update
 
 # Nur Runtime-Dependencies installieren (KEINE build-essential!)
+# HINWEIS Debian 12 (bookworm): libncurses6 (nicht libncurses5),
+# libuuid1 (nicht uuid-runtime), libodbc2 fuer unixODBC-Runtime.
 RUN apt-get install -y --no-install-recommends \
     # Asterisk Runtime
-    libnewt0.52 libssl3 libncurses5 libsqlite3-0 \
-    libjansson4 libxml2 uuid-runtime libedit2 \
-    unixodbc libasound2 libogg0 libvorbis0a libicu72 libcurl4 \
+    libnewt0.52 libssl3 libncurses6 libsqlite3-0 \
+    libjansson4 libxml2 libuuid1 libedit2 \
+    libodbc2 odbcinst unixodbc libasound2 libogg0 libvorbis0a libicu72 libcurl4 \
     libical3 libneon27 libsrtp2-1 libspandsp2 \
+    libspeex1 libspeexdsp1 \
     # Database
     mariadb-server mariadb-client \
     # PHP & Web Server
     php8.2 php8.2-cli php8.2-fpm php8.2-mysql php8.2-curl php8.2-mbstring \
     php8.2-xml php8.2-gd php8.2-intl php8.2-bcmath php8.2-zip php-pear \
-    nginx supervisor \
+    nginx supervisor curl \
     # Audio Tools (minimal)
     sox lame mpg123 \
     # Basic utilities
@@ -72,11 +83,20 @@ RUN apt-get install -y --no-install-recommends \
     && apt-get clean
 
 # Asterisk von Builder Stage kopieren
+# Mit --libdir=/usr/lib liegen libasteriskssl & Co. in /usr/lib,
+# Module in /usr/lib/asterisk -> beides kopieren + ld-Cache neu aufbauen.
 COPY --from=builder /usr/sbin/asterisk /usr/sbin/asterisk
+COPY --from=builder /usr/lib/libasterisk* /usr/lib/
 COPY --from=builder /usr/lib/asterisk /usr/lib/asterisk
+COPY --from=builder /usr/share/asterisk /usr/share/asterisk
 COPY --from=builder /var/lib/asterisk /var/lib/asterisk
+COPY --from=builder /var/spool/asterisk /var/spool/asterisk
 COPY --from=builder /etc/asterisk /etc/asterisk
+COPY --from=builder /etc/ld.so.conf.d/asterisk.conf /etc/ld.so.conf.d/asterisk.conf
 COPY --from=builder /usr/src/freepbx /usr/src/freepbx
+RUN ldconfig && \
+    ldd /usr/sbin/asterisk | tee /tmp/asterisk-ldd.log && \
+    if ldd /usr/sbin/asterisk | grep -q "not found"; then echo "FEHLER: unaufgeloeste Asterisk-Libraries im Runtime-Image:"; grep "not found" /tmp/asterisk-ldd.log; exit 1; fi
 
 # Asterisk Benutzer & Rechte setzen
 RUN groupadd -r asterisk && useradd -r -d /var/lib/asterisk -g asterisk asterisk && \

@@ -1,6 +1,25 @@
 #!/bin/bash
 set -e
 
+# Shared-Library-Pfad sicherstellen (Fix fuer Issue #1:
+# "libasteriskssl.so.1: cannot open shared object file")
+if [ -d /usr/lib/asterisk ] && ! grep -qr "/usr/lib/asterisk" /etc/ld.so.conf.d/ 2>/dev/null; then
+    echo "/usr/lib/asterisk" > /etc/ld.so.conf.d/asterisk.conf
+fi
+ldconfig || true
+
+# Fruehzeitiger Preflight-Check mit verstaendlicher Fehlermeldung
+if [ ! -x /usr/sbin/asterisk ]; then
+    echo "FEHLER: /usr/sbin/asterisk nicht gefunden. Image neu bauen." >&2
+    exit 1
+fi
+if ldd /usr/sbin/asterisk 2>/dev/null | grep -q "not found"; then
+    echo "FEHLER: Asterisk Shared Libraries fehlen:" >&2
+    ldd /usr/sbin/asterisk | grep "not found" >&2 || true
+    echo "Tipp: Image neu bauen (Fix: --libdir=/usr/lib + ld.so.conf). Siehe Issue #1." >&2
+    exit 1
+fi
+
 # Zeitzone falls nötig
 ln -sf /usr/share/zoneinfo/Europe/Berlin /etc/localtime
 echo "Europe/Berlin" > /etc/timezone
@@ -34,7 +53,11 @@ if [ ! -f /var/www/html/admin/config.php ]; then
     
     # Starte Asterisk temporär für FreePBX Installation
     echo "STARTING ASTERISK FOR INSTALLATION"
-    /usr/sbin/asterisk -U asterisk -G asterisk
+    if ! /usr/sbin/asterisk -U asterisk -G asterisk; then
+        echo "FEHLER: Asterisk startete nicht. Library-Check:" >&2
+        ldd /usr/sbin/asterisk >&2 || true
+        exit 1
+    fi
     
     # Warte bis Asterisk läuft
     sleep 5
