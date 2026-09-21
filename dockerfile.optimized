@@ -89,7 +89,6 @@ RUN apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/sbin/asterisk /usr/sbin/asterisk
 COPY --from=builder /usr/lib/libasterisk* /usr/lib/
 COPY --from=builder /usr/lib/asterisk /usr/lib/asterisk
-COPY --from=builder /usr/share/asterisk /usr/share/asterisk
 COPY --from=builder /var/lib/asterisk /var/lib/asterisk
 COPY --from=builder /var/spool/asterisk /var/spool/asterisk
 COPY --from=builder /etc/asterisk /etc/asterisk
