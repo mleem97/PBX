@@ -63,7 +63,7 @@ RUN cd /usr/src && \
 # --------------------------------------------------------
 RUN groupadd -r asterisk && useradd -r -d /var/lib/asterisk -g asterisk asterisk && \
     usermod -aG audio,dialout asterisk && \
-    mkdir -p /var/{lib,spool,log}/asterisk && \
+    mkdir -p /var/lib/asterisk /var/spool/asterisk /var/log/asterisk && \
     chown -R asterisk:asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /etc/asterisk
 
 # --------------------------------------------------------
