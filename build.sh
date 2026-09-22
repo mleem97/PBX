@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # FreePBX Docker Build & Push Script
-# Usage: ./build.sh [dev|prod|all] [--push]
+# Usage: ./build.sh [dev|prod|alpine|all] [--push]
 
 set -e
 
@@ -9,6 +9,7 @@ set -e
 IMAGE_NAME="lnxr-freepbx"
 DEV_TAG="dev"
 PROD_TAG="17"
+ALPINE_TAG="17-alpine"
 DOCKER_HUB_USER="${DOCKER_HUB_USER:-mleem97}"  # Change to your Docker Hub username
 REGISTRY="${DOCKER_REGISTRY:-docker.io}"
 
@@ -38,12 +39,14 @@ log_error() {
 
 # Show usage
 show_usage() {
-    echo "Usage: $0 [dev|prod|all] [--push]"
+    echo "Usage: $0 [dev|prod|alpine|versions|all] [--push]"
     echo ""
     echo "Commands:"
-    echo "  dev     Build development image ($IMAGE_NAME:$DEV_TAG)"
-    echo "  prod    Build production image ($IMAGE_NAME:$PROD_TAG)"
-    echo "  all     Build both dev and prod images"
+    echo "  dev       Build development image ($IMAGE_NAME:$DEV_TAG)"
+    echo "  prod      Build production image ($IMAGE_NAME:$PROD_TAG)"
+    echo "  alpine    Build Alpine-based image ($IMAGE_NAME:$ALPINE_TAG)"
+    echo "  versions  Build Asterisk version tags ($ASTERISK_VERSIONS, Debian + Alpine each)"
+    echo "  all       Build dev, prod and alpine images"
     echo ""
     echo "Options:"
     echo "  --push  Push images to Docker Hub after build"
@@ -55,7 +58,9 @@ show_usage() {
     echo "Examples:"
     echo "  $0 dev              # Build dev image only"
     echo "  $0 prod --push      # Build prod image and push to Docker Hub"
-    echo "  $0 all --push       # Build both images and push to Docker Hub"
+    echo "  $0 alpine --push    # Build Alpine image and push to Docker Hub"
+    echo "  $0 versions --push  # Build all Asterisk version tags and push"
+    echo "  $0 all --push       # Build dev/prod/alpine images and push to Docker Hub"
 }
 
 # Check if Docker is running
@@ -100,15 +105,82 @@ build_prod() {
     log_success "Production image tagged: $IMAGE_NAME:$PROD_TAG"
 }
 
+# Build Alpine-based image
+build_alpine() {
+    log_info "Building Alpine image: $IMAGE_NAME:$ALPINE_TAG"
+
+    docker build -f dockerfile.alpine -t "$IMAGE_NAME:$ALPINE_TAG" .
+
+    log_success "Alpine image built: $IMAGE_NAME:$ALPINE_TAG"
+
+    # Show image size
+    local size=$(docker images "$IMAGE_NAME:$ALPINE_TAG" --format "{{.Size}}")
+    log_info "Image size: $size"
+}
+
+# Asterisk major versions with dedicated tags (FreePBX 17 supports 18-22)
+ASTERISK_VERSIONS="18 19 20 21 22"
+
+# Pinned release tarball for EOL branches without *-current symlink
+# (empty = use asterisk-<major>-current.tar.gz)
+tarball_for_version() {
+    case "$1" in
+        18) echo "http://downloads.asterisk.org/pub/telephony/asterisk/releases/asterisk-18.26.4.tar.gz" ;;
+        19) echo "http://downloads.asterisk.org/pub/telephony/asterisk/releases/asterisk-19.8.1.tar.gz" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Build one Asterisk version (Debian + Alpine images)
+build_version() {
+    local ver="$1"
+    local tarball_url
+    tarball_url="$(tarball_for_version "$ver")"
+
+    local tarball_arg=()
+    if [[ -n "$tarball_url" ]]; then
+        tarball_arg=(--build-arg "ASTERISK_TARBALL_URL=$tarball_url")
+    fi
+
+    log_info "Building $IMAGE_NAME:$ver (Asterisk $ver, Debian)"
+    docker build -f dockerfile.optimized \
+        --build-arg "ASTERISK_VERSION=$ver" \
+        "${tarball_arg[@]}" \
+        -t "$IMAGE_NAME:$ver" .
+    log_success "Built: $IMAGE_NAME:$ver"
+
+    log_info "Building $IMAGE_NAME:$ver-alpine (Asterisk $ver, Alpine)"
+    docker build -f dockerfile.alpine \
+        --build-arg "ASTERISK_VERSION=$ver" \
+        "${tarball_arg[@]}" \
+        -t "$IMAGE_NAME:$ver-alpine" .
+    log_success "Built: $IMAGE_NAME:$ver-alpine"
+}
+
+# Build all Asterisk version tags
+build_versions() {
+    local ver
+    for ver in $ASTERISK_VERSIONS; do
+        build_version "$ver"
+    done
+}
+
+# Collect version tags for pushing
+version_tags() {
+    local ver
+    for ver in $ASTERISK_VERSIONS; do
+        echo "$ver" "$ver-alpine"
+    done
+}
+
 # Push images to Docker Hub
 push_images() {
     local images=("$@")
-    
-    # Check if logged in to Docker Hub
-    if ! docker info 2>/dev/null | grep -q "Username"; then
-        log_warning "Not logged in to Docker Hub. Attempting login..."
-        docker login
-    fi
+
+    # NOTE: no programmatic login check here - `docker info | grep Username`
+    # no longer works on modern Docker. Pushing without valid credentials
+    # fails with a clear error from the daemon. Run `docker login` manually
+    # if needed (requires a TTY or configured credential helper).
     
     for tag in "${images[@]}"; do
         local hub_image="$DOCKER_HUB_USER/$IMAGE_NAME:$tag"
@@ -182,11 +254,24 @@ main() {
                 images_to_push=("$PROD_TAG")
             fi
             ;;
+        "alpine")
+            build_alpine
+            if [[ "$push_flag" == "--push" ]]; then
+                images_to_push=("$ALPINE_TAG")
+            fi
+            ;;
+        "versions")
+            build_versions
+            if [[ "$push_flag" == "--push" ]]; then
+                images_to_push=($(version_tags))
+            fi
+            ;;
         "all")
             build_dev
             build_prod
+            build_alpine
             if [[ "$push_flag" == "--push" ]]; then
-                images_to_push=("$DEV_TAG" "$PROD_TAG")
+                images_to_push=("$DEV_TAG" "$PROD_TAG" "$ALPINE_TAG")
             fi
             ;;
         *)

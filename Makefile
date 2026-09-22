@@ -1,5 +1,5 @@
 # FreePBX Docker Makefile
-.PHONY: help build-dev build-prod build-all push-dev push-prod push-all up-dev up-prod down-dev down-prod clean logs
+.PHONY: help build-dev build-prod build-alpine build-versions build-all push-dev push-prod push-alpine push-versions push-all up-dev up-prod up-alpine down-dev down-prod down-alpine clean logs
 
 # Default target
 help: ## Show this help message
@@ -14,8 +14,14 @@ build-dev: ## Build development image (lnxr-freepbx:dev)
 build-prod: ## Build production image (lnxr-freepbx:17)
 	./build.sh prod
 
-build-all: ## Build both dev and prod images
+build-alpine: ## Build Alpine image (lnxr-freepbx:17-alpine)
+	./build.sh alpine
+
+build-all: ## Build dev, prod and alpine images
 	./build.sh all
+
+build-versions: ## Build Asterisk version tags 18-22 (Debian + Alpine)
+	./build.sh versions
 
 # Push targets  
 push-dev: ## Build and push development image to Docker Hub
@@ -24,12 +30,21 @@ push-dev: ## Build and push development image to Docker Hub
 push-prod: ## Build and push production image to Docker Hub
 	./build.sh prod --push
 
-push-all: ## Build and push both images to Docker Hub
+push-alpine: ## Build and push Alpine image to Docker Hub
+	./build.sh alpine --push
+
+push-all: ## Build and push all images to Docker Hub
 	./build.sh all --push
+
+push-versions: ## Build and push Asterisk version tags 18-22 to Docker Hub
+	./build.sh versions --push
 
 # Container management
 up-dev: ## Start development container
 	docker-compose up -d
+
+up-alpine: ## Start Alpine container
+	docker compose -f docker-compose.alpine.yml up -d
 
 up-prod: ## Start production container (requires .env.prod)
 	docker-compose -f docker-compose.prod.yml --env-file .env.prod up -d
@@ -39,6 +54,9 @@ down-dev: ## Stop development container
 
 down-prod: ## Stop production container
 	docker-compose -f docker-compose.prod.yml down
+
+down-alpine: ## Stop Alpine container
+	docker compose -f docker-compose.alpine.yml down
 
 # Utility targets
 logs: ## Show logs for running containers

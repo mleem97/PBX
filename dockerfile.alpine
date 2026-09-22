@@ -1,0 +1,207 @@
+# Multi-stage Dockerfile for FreePBX 17 + Asterisk on Alpine Linux 3.20
+# Smaller alternative to the Debian-based images.
+# Builds tags: lnxr-freepbx:17-alpine (default) or per-version (18-alpine ... 22-alpine)
+
+# ============================================================================
+# STAGE 1: Build Stage - compiles Asterisk and prepares FreePBX
+# ============================================================================
+FROM alpine:3.20 AS builder
+
+# Build arguments (override per Asterisk major version, e.g.
+# --build-arg ASTERISK_VERSION=18 --build-arg ASTERISK_TARBALL_URL=<pinned release>)
+ARG ASTERISK_VERSION=21
+ARG ASTERISK_TARBALL_URL=
+
+ENV ASTERISK_VERSION=${ASTERISK_VERSION}
+ENV ASTERISK_TARBALL_URL=${ASTERISK_TARBALL_URL}
+ENV FREEPBX_BRANCH=release/17.0
+
+# Build dependencies
+# NOTE: subversion is required by contrib/scripts/get_mp3_source.sh
+RUN apk update && apk add --no-cache \
+    build-base linux-headers \
+    ncurses-dev newt-dev openssl-dev sqlite-dev \
+    jansson-dev libxml2-dev util-linux-dev libedit-dev \
+    unixodbc-dev alsa-lib-dev libogg-dev libvorbis-dev icu-dev curl-dev \
+    libical-dev neon-dev libsrtp-dev spandsp-dev speex-dev speexdsp-dev zlib-dev \
+    curl wget git subversion
+
+# Compile Asterisk (TARBALL_URL leer = <major>-current, sonst gepinntes Release)
+# NOTE: --libdir=/usr/lib so the musl loader finds libasteriskssl.so.1
+# (same root cause as Issue #1 on the Debian image).
+RUN mkdir -p /usr/src && cd /usr/src && \
+    TARBALL_URL="${ASTERISK_TARBALL_URL:-http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}-current.tar.gz}" && \
+    echo "Downloading $TARBALL_URL" && \
+    wget "$TARBALL_URL" -O asterisk.tar.gz && \
+    tar xzf asterisk.tar.gz && \
+    cd asterisk-${ASTERISK_VERSION}*/ && \
+    # musl (Alpine) has no BSD sys/cdefs.h macros (__P, __BEGIN_DECLS),
+    # but the bundled Berkeley DB 1.x (db1-ast, only used for the
+    # astdb2sqlite3/astdb2bdb utils) needs them -> compat defines.
+    printf '%s\n' \
+        '#ifndef AST_MUSL_CDEFS_COMPAT' \
+        '#define AST_MUSL_CDEFS_COMPAT' \
+        '#ifndef __P' \
+        '#define __P(protos) protos' \
+        '#endif' \
+        '#ifndef __BEGIN_DECLS' \
+        '#ifdef __cplusplus' \
+        '#define __BEGIN_DECLS extern "C" {' \
+        '#define __END_DECLS }' \
+        '#else' \
+        '#define __BEGIN_DECLS' \
+        '#define __END_DECLS' \
+        '#endif' \
+        '#endif' \
+        '#endif' > /tmp/musl-compat.h && \
+    for f in $(grep -rlE '__P|__BEGIN_DECLS' utils/db1-ast); do \
+        case "$f" in *.h) \
+            cat /tmp/musl-compat.h "$f" > "$f.new" && mv "$f.new" "$f" ;; \
+        esac; \
+    done && \
+    # musl's malloc.h does NOT pre-declare malloc/calloc (glibc's does),
+    # and musl even declares calloc/free in <sched.h>. So the MALLOC_DEBUG
+    # calloc/malloc/free macros would rewrite those later declarations ->
+    # pre-include the headers first (same pattern the header already
+    # uses for <sys/types.h>).
+    awk '{print} /#include <sys\/types.h>/ {print "#include <stdlib.h>"; print "#include <stdio.h>"; print "#include <pthread.h>"; print "#include <sched.h>"}' \
+        third-party/pjproject/patches/asterisk_malloc_debug.h > /tmp/amd.h && \
+    mv /tmp/amd.h third-party/pjproject/patches/asterisk_malloc_debug.h && \
+    grep -q '#include <sched.h>' third-party/pjproject/patches/asterisk_malloc_debug.h && \
+    # Same problem in include/asterisk/astmm.h: its calloc/malloc/free
+    # poison macros break musl's <sched.h> (via <pthread.h>) declarations
+    # -> pre-include the headers UNCONDITIONALLY before the macro block.
+    awk '/#if ASTMM_LIBC == ASTMM_IGNORE/ {print "/* musl/Alpine compat: pre-include libc headers before poison macros */"; print "#include <stdlib.h>"; print "#include <stdio.h>"; print "#include <pthread.h>"; print "#include <sched.h>"} {print}' \
+        include/asterisk/astmm.h > /tmp/astmm.h && \
+    mv /tmp/astmm.h include/asterisk/astmm.h && \
+    grep -q 'musl/Alpine compat' include/asterisk/astmm.h && \
+    # include/asterisk/compat.h provides __P/__BEGIN_DECLS only for Solaris,
+    # assuming glibc elsewhere -> add a separate musl-only block with JUST
+    # the macro defines (NOT the Solaris-only headers below it).
+    # This also fixes main/ast_expr2.y, which gets __P via asterisk.h.
+    awk '/^#ifdef SOLARIS$/ && !done {print "/* musl/Alpine compat: BSD macros that glibc gets from sys/cdefs.h */"; print "#if !defined(__GLIBC__) && defined(__linux__)"; print "#include <sys/stat.h>"; print "#ifndef __BEGIN_DECLS"; print "#define __BEGIN_DECLS"; print "#endif"; print "#ifndef __END_DECLS"; print "#define __END_DECLS"; print "#endif"; print "#ifndef __P"; print "#define __P(p) p"; print "#endif"; print "#ifndef ALLPERMS"; print "#define ALLPERMS (S_ISUID|S_ISGID|S_ISVTX|S_IRWXU|S_IRWXG|S_IRWXO)"; print "#endif"; print "#endif"; print ""; done=1} {print}' \
+        include/asterisk/compat.h > /tmp/compat.h && \
+    mv /tmp/compat.h include/asterisk/compat.h && \
+    grep -q 'musl/Alpine compat' include/asterisk/compat.h && \
+    # musl has no PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP, so statically
+    # initialized locks would be NON-recursive -> self-deadlock as soon as
+    # code re-locks (e.g. module loader). Enable the constructor-based
+    # init path (as on Solaris/BSD) so static locks become recursive via
+    # ast_mutex_init() at startup.
+    awk '/^#if \(defined\(SOLARIS\) \|\| defined\(BSD\)\)$/ && !done {print "#if (defined(SOLARIS) || defined(BSD) || (!defined(__GLIBC__) \&\& defined(__linux__))) /* musl/Alpine compat */"; done=1; next} {print}' \
+        include/asterisk/lock.h > /tmp/lock.h && \
+    mv /tmp/lock.h include/asterisk/lock.h && \
+    grep -q 'musl/Alpine compat' include/asterisk/lock.h && \
+    contrib/scripts/get_mp3_source.sh && \
+    ./configure --libdir=/usr/lib --with-pjproject-bundled --with-jansson-bundled --with-ssl && \
+    make menuselect.makeopts && \
+    menuselect/menuselect --enable format_mp3 menuselect.makeopts && \
+    menuselect/menuselect --enable res_crypto menuselect.makeopts && \
+    # musl only resolves executable symbols for dlopened modules when the
+    # executable is linked with -rdynamic (verified: --dynamic-list /
+    # --version-script exports are NOT honored the same way; without it
+    # every module fails with "symbol not found").
+    ASTLDFLAGS="-rdynamic" make -j$(nproc) && make install && make samples && (make config || true) && \
+    ldd /usr/sbin/asterisk | tee /tmp/asterisk-ldd.log && \
+    if ldd /usr/sbin/asterisk | grep -q "not found"; then echo "ERROR: unresolved Asterisk libraries:"; grep "not found" /tmp/asterisk-ldd.log; exit 1; fi && \
+    test -f /usr/lib/libasteriskssl.so.1
+
+# Clone FreePBX framework (installed on first container start)
+# + fix upstream bug: installcommand returns 1 even on success
+# ("You have successfully installed FreePBX" followed by return 1),
+# which would kill the entrypoint (set -e) after a GOOD install.
+RUN cd /usr/src && \
+    git clone -b ${FREEPBX_BRANCH} https://github.com/FreePBX/framework freepbx && \
+    if [ "$(grep -c 'return 1;' freepbx/installlib/installcommand.class.php)" = "1" ]; then \
+        sed -i 's/^\t\treturn 1;$/\t\treturn 0;/' freepbx/installlib/installcommand.class.php && \
+        echo "Patched installcommand exit code (return 1 -> return 0)"; \
+    else \
+        echo "installcommand exit-code patch not needed/applicable"; \
+    fi
+
+# ============================================================================
+# STAGE 2: Runtime Stage - minimal production image
+# ============================================================================
+FROM alpine:3.20
+
+ENV TZ=Europe/Berlin
+
+# Runtime dependencies only (no build tools)
+RUN apk update && apk add --no-cache \
+    # Asterisk runtime libraries
+    ncurses-libs libedit jansson libxml2 libuuid \
+    unixodbc alsa-lib libogg libvorbis icu-libs libcurl \
+    libical neon libsrtp spandsp libssl3 sqlite-libs zlib \
+    speex speexdsp \
+    # Database
+    mariadb mariadb-client \
+    # PHP 8.2 & web server
+    php82 php82-fpm php82-mysqli php82-pdo_mysql php82-curl php82-mbstring \
+    php82-xml php82-dom php82-simplexml php82-gd php82-intl php82-bcmath \
+    php82-zip php82-pear php82-session php82-openssl php82-sockets \
+    php82-gettext php82-posix php82-iconv php82-fileinfo php82-phar php82-exif \
+    php82-sysvsem php82-sysvshm php82-sysvmsg php82-shmop php82-pcntl \
+    nginx supervisor curl \
+    # Audio tools
+    sox lame mpg123 \
+    # NodeJS (required by FreePBX 17, e.g. UCP/PM2)
+    nodejs \
+    # Utilities & timezone data (bash: entrypoint.sh uses #!/bin/bash;
+    # util-linux-login: provides runuser, needed by FreePBX install;
+    # gnupg: required by FreePBX module signing (GPG.class.php);
+    # findutils: GNU find with -xtype, needed by FreePBX chown routine)
+    git wget tzdata bash util-linux-login gnupg findutils \
+    && rm -rf /var/cache/apk/*
+
+# FreePBX expects a plain `php` binary (Alpine only ships `php82`)
+RUN ln -s /usr/bin/php82 /usr/bin/php
+
+# Copy Asterisk from the builder stage
+# (musl needs no ldconfig; it searches /lib and /usr/lib by default)
+COPY --from=builder /usr/sbin/asterisk /usr/sbin/asterisk
+COPY --from=builder /usr/lib/libasterisk* /usr/lib/
+COPY --from=builder /usr/lib/asterisk /usr/lib/asterisk
+COPY --from=builder /var/lib/asterisk /var/lib/asterisk
+COPY --from=builder /var/spool/asterisk /var/spool/asterisk
+COPY --from=builder /etc/asterisk /etc/asterisk
+COPY --from=builder /usr/src/freepbx /usr/src/freepbx
+RUN ldd /usr/sbin/asterisk | tee /tmp/asterisk-ldd.log && \
+    if ldd /usr/sbin/asterisk | grep -q "not found"; then echo "ERROR: unresolved Asterisk libraries in runtime image:"; grep "not found" /tmp/asterisk-ldd.log; exit 1; fi
+
+# Asterisk user & permissions (BusyBox syntax; /bin/sh login shell like Debian,
+# FreePBX install talks to Asterisk via runuser as this user)
+RUN addgroup -S asterisk && \
+    adduser -S -D -H -h /var/lib/asterisk -s /bin/sh -G asterisk asterisk && \
+    mkdir -p /var/lib/asterisk /var/spool/asterisk /var/log/asterisk && \
+    chown -R asterisk:asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk /etc/asterisk
+
+# Nginx configuration (Alpine uses /etc/nginx/http.d/)
+COPY freepbx-nginx.alpine.conf /etc/nginx/http.d/freepbx.conf
+RUN rm -f /etc/nginx/http.d/default.conf
+
+# PHP configuration
+RUN sed -i 's/;cgi.fix_pathinfo=1/cgi.fix_pathinfo=0/' /etc/php82/php.ini && \
+    sed -i 's/memory_limit = .*/memory_limit = 256M/' /etc/php82/php.ini && \
+    sed -i 's/upload_max_filesize = .*/upload_max_filesize = 20M/' /etc/php82/php.ini && \
+    sed -i 's/post_max_size = .*/post_max_size = 20M/' /etc/php82/php.ini
+
+# PHP-FPM must run as asterisk:asterisk (Alpine default is nobody:nobody),
+# otherwise it cannot read asterisk-owned files like /etc/freepbx.conf.
+RUN sed -i 's/^user = .*/user = asterisk/' /etc/php82/php-fpm.d/www.conf && \
+    sed -i 's/^group = .*/group = asterisk/' /etc/php82/php-fpm.d/www.conf && \
+    grep -E '^(user|group) = asterisk' /etc/php82/php-fpm.d/www.conf
+
+# Entrypoint & supervisor
+COPY entrypoint.sh /entrypoint.sh
+COPY supervisord.alpine.conf /etc/supervisor/conf.d/supervisord.conf
+RUN chmod +x /entrypoint.sh
+
+# Cleanup sample configs
+RUN find /var/lib/asterisk /etc/asterisk -name "*.sample" -delete 2>/dev/null || true && \
+    rm -rf /tmp/* /var/tmp/*
+
+EXPOSE 80 443 5060/udp 5061/udp 10000-20000/udp
+VOLUME [ "/var/lib/asterisk", "/var/spool/asterisk", "/var/log/asterisk", "/etc/asterisk", "/var/www/html", "/var/lib/mysql" ]
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

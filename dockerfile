@@ -28,7 +28,7 @@ RUN apt-get install -y --no-install-recommends \
     mariadb-server mariadb-client \
     php8.2 php8.2-cli php8.2-fpm php8.2-mysql php8.2-curl php8.2-mbstring \
     php8.2-xml php8.2-gd php8.2-intl php8.2-bcmath php8.2-zip php-pear \
-    nginx supervisor nodejs npm sox lame ffmpeg mpg123 \
+    nginx supervisor nodejs npm sox lame ffmpeg mpg123 cron \
     && rm -rf /var/lib/apt/lists/*
 
 # --------------------------------------------------------
@@ -68,9 +68,18 @@ RUN groupadd -r asterisk && useradd -r -d /var/lib/asterisk -g asterisk asterisk
 
 # --------------------------------------------------------
 # FreePBX aus Git klonen (Installation wird später im Entrypoint gemacht)
+# + Upstream-Bugfix: installcommand liefert exit 1 trotz Erfolg
+#   ("You have successfully installed FreePBX" + return 1) -> wuerde
+#   den Entrypoint (set -e) nach GELUNGENER Installation abbrechen.
 # --------------------------------------------------------
 RUN cd /usr/src && \
-    git clone -b ${FREEPBX_BRANCH} https://github.com/FreePBX/framework freepbx
+    git clone -b ${FREEPBX_BRANCH} https://github.com/FreePBX/framework freepbx && \
+    if [ "$(grep -c 'return 1;' freepbx/installlib/installcommand.class.php)" = "1" ]; then \
+        sed -i 's/^\t\treturn 1;$/\t\treturn 0;/' freepbx/installlib/installcommand.class.php && \
+        echo "Patched installcommand exit code (return 1 -> return 0)"; \
+    else \
+        echo "installcommand exit-code patch not needed/applicable"; \
+    fi
 
 # --------------------------------------------------------
 # Konfiguration nginx + PHP-FPM vorbereiten
@@ -85,6 +94,12 @@ RUN sed -i 's/;cgi.fix_pathinfo=1/cgi.fix_pathinfo=0/' /etc/php/8.2/fpm/php.ini 
     sed -i 's/upload_max_filesize = .*/upload_max_filesize = 20M/' /etc/php/8.2/fpm/php.ini && \
     sed -i 's/post_max_size = .*/post_max_size = 20M/' /etc/php/8.2/fpm/php.ini
 
+# PHP-FPM muss als asterisk:asterisk laufen (Default www-data kann die
+# asterisk-eigenen Dateien wie /etc/freepbx.conf (660) nicht lesen -> HTTP 500)
+RUN sed -i 's/^user = .*/user = asterisk/' /etc/php/8.2/fpm/pool.d/www.conf && \
+    sed -i 's/^group = .*/group = asterisk/' /etc/php/8.2/fpm/pool.d/www.conf && \
+    grep -E '^(user|group) = asterisk' /etc/php/8.2/fpm/pool.d/www.conf
+
 # --------------------------------------------------------
 # Entrypoint script hinzufügen
 # --------------------------------------------------------
@@ -95,6 +110,7 @@ RUN chmod +x /entrypoint.sh
 # Supervisor Konfiguration kopieren
 # --------------------------------------------------------
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+RUN ln -sf /etc/supervisor/conf.d/supervisord.conf /etc/supervisor/supervisord.conf
 
 # --------------------------------------------------------
 # Ports & Volumes

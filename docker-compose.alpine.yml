@@ -1,0 +1,36 @@
+# Development compose file for the Alpine-based image.
+# Uses dockerfile.alpine (Alpine Linux 3.20, musl) instead of Debian.
+# NOTE: stop other variants first - host ports are identical.
+services:
+  freepbx:
+    build:
+      context: .
+      dockerfile: dockerfile.alpine
+      tags:
+        - "lnxr-freepbx:17-alpine"
+    image: lnxr-freepbx:17-alpine
+    container_name: lnxr-freepbx-alpine
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Berlin
+    ports:
+      - "8080:80"
+      - "8443:443"
+      - "5060:5060/udp"
+      - "5061:5061/udp"
+      - "10000-20000:10000-20000/udp"
+    volumes:
+      - freepbx_alpine_etc_asterisk:/etc/asterisk
+      - freepbx_alpine_var_lib_asterisk:/var/lib/asterisk
+      - freepbx_alpine_var_log:/var/log/asterisk
+      - freepbx_alpine_spool:/var/spool/asterisk
+      - freepbx_alpine_www:/var/www/html
+      - freepbx_alpine_db:/var/lib/mysql
+
+volumes:
+  freepbx_alpine_etc_asterisk:
+  freepbx_alpine_var_lib_asterisk:
+  freepbx_alpine_var_log:
+  freepbx_alpine_spool:
+  freepbx_alpine_www:
+  freepbx_alpine_db:

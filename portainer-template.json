@@ -1,0 +1,64 @@
+{
+  "version": "3",
+  "templates": [
+    {
+      "type": 3,
+      "title": "FreePBX 17 + Asterisk",
+      "description": "Complete FreePBX 17 + Asterisk VoIP phone system with web management. First boot installs FreePBX automatically (2-5 min), then open the web UI on port 8080. SIP (5060/udp) and RTP (10000-20000/udp) are published directly on the host; only the web UI should go behind a reverse proxy. See https://github.com/mleem97/PBX for docs, tags (Asterisk 18-22, Alpine variants) and troubleshooting.",
+      "categories": ["VoIP", "PBX", "Communication"],
+      "platform": "linux",
+      "logo": "https://raw.githubusercontent.com/mleem97/PBX/main/docs/screenshots/01-login.png",
+      "repository": {
+        "url": "https://github.com/mleem97/PBX",
+        "stackfile": "docker-compose.prod.yml"
+      },
+      "env": [
+        {
+          "name": "IMAGE_REGISTRY",
+          "label": "Image registry/namespace",
+          "default": "mleem97"
+        },
+        {
+          "name": "IMAGE_TAG",
+          "label": "Image tag (17, dev, 17-alpine, 18-22, 18-alpine-22-alpine)",
+          "default": "17"
+        },
+        {
+          "name": "HTTP_PORT",
+          "label": "Host port for web UI (HTTP)",
+          "default": "8080"
+        },
+        {
+          "name": "HTTPS_PORT",
+          "label": "Host port for HTTPS (reserved)",
+          "default": "8443"
+        },
+        {
+          "name": "SIP_PORT",
+          "label": "Host port for SIP signaling (UDP)",
+          "default": "5060"
+        },
+        {
+          "name": "SIPS_PORT",
+          "label": "Host port for secure SIP (UDP)",
+          "default": "5061"
+        },
+        {
+          "name": "RTP_START",
+          "label": "First RTP media port (UDP)",
+          "default": "10000"
+        },
+        {
+          "name": "RTP_END",
+          "label": "Last RTP media port (UDP)",
+          "default": "20000"
+        },
+        {
+          "name": "TIMEZONE",
+          "label": "Container timezone",
+          "default": "Europe/Berlin"
+        }
+      ]
+    }
+  ]
+}
